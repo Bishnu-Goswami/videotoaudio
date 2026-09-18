@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Status Audio/Video Converter</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FFmpeg WASM (v0.12) -->
+    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+    <script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+</head>
+<body class="bg-gray-100 min-h-screen p-6 font-sans">
+    <div class="max-w-2xl mx-auto bg-white p-8 rounded-xl shadow-lg">
+        <h1 class="text-2xl font-bold mb-6 text-gray-800">StarMaker to WhatsApp Status Converter</h1>
+        
+        <!-- Input File -->
+        <div class="mb-6">
+            <label class="block text-sm font-medium text-gray-700 mb-2">1. Upload StarMaker Video/Audio</label>
+            <input type="file" id="mediaInput" accept="video/*,audio/*" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+        </div>
+
+        <!-- Conversion Mode -->
+        <div class="mb-6">
+            <label class="block text-sm font-medium text-gray-700 mb-2">2. Choose Output Format</label>
+            <div class="flex items-center space-x-4">
+                <label class="flex items-center">
+                    <input type="radio" name="mode" value="mp3" checked class="text-blue-600 focus:ring-blue-500" onchange="toggleOptions()">
+                    <span class="ml-2 text-gray-700">Extract MP3 Audio</span>
+                </label>
+                <label class="flex items-center">
+                    <input type="radio" name="mode" value="mp4" class="text-blue-600 focus:ring-blue-500" onchange="toggleOptions()">
+                    <span class="ml-2 text-gray-700">Create MP4 for WhatsApp</span>
+                </label>
+            </div>
+        </div>
+
+        <!-- MP4 specific options (Hidden by default) -->
+        <div id="mp4Options" class="hidden mb-6 p-4 border border-gray-200 rounded-md bg-gray-50">
+            <label class="block text-sm font-medium text-gray-700 mb-2">Visual Background for WhatsApp</label>
+            
+            <div class="mb-4">
+                <label class="flex items-center mb-2">
+                    <input type="radio" name="bgType" value="text" checked class="text-blue-600 focus:ring-blue-500" onchange="toggleBgOptions()">
+                    <span class="ml-2 text-gray-700">Custom Text (Black Background)</span>
+                </label>
+                <input type="text" id="textInput" placeholder="Enter lyrics or title here..." class="w-full mt-1 p-2 border border-gray-300 rounded-md">
+            </div>
+
+            <div>
+                <label class="flex items-center mb-2">
+                    <input type="radio" name="bgType" value="image" class="text-blue-600 focus:ring-blue-500" onchange="toggleBgOptions()">
+                    <span class="ml-2 text-gray-700">Upload Custom Image</span>
+                </label>
+                <input type="file" id="imageInput" accept="image/*" class="hidden w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-gray-100 file:text-gray-700">
+            </div>
+        </div>
+
+        <!-- Action Button -->
+        <button id="processBtn" onclick="processMedia()" class="w-full bg-blue-600 text-white font-bold py-3 px-4 rounded-md hover:bg-blue-700 transition">
+            Process File
+        </button>
+
+        <!-- Log & Progress -->
+        <div class="mt-6">
+            <p id="status" class="text-sm font-semibold text-gray-700 mb-2"></p>
+            <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2 hidden" id="progressContainer">
+                <div class="bg-blue-600 h-2.5 rounded-full" id="progressBar" style="width: 0%"></div>
+            </div>
+            <p id="log" class="text-xs text-gray-500 font-mono h-24 overflow-y-auto bg-gray-100 p-2 rounded border"></p>
+        </div>
+
+        <!-- Download Link -->
+        <a id="downloadLink" class="hidden mt-4 block w-full text-center bg-green-500 text-white font-bold py-3 px-4 rounded-md hover:bg-green-600 transition">
+            Download Result
+        </a>
+    </div>
+
+    <script>
+        const { FFmpeg } = FFmpegWASM;
+        const { fetchFile } = FFmpegUtil;
+        let ffmpeg = null;
+
+        // Toggle UI based on selected mode
+        function toggleOptions() {
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            document.getElementById('mp4Options').style.display = mode === 'mp4' ? 'block' : 'none';
+        }
+
+        // Toggle UI between Text or Image background
+        function toggleBgOptions() {
+            const bgType = document.querySelector('input[name="bgType"]:checked').value;
+            const textInput = document.getElementById('textInput');
+            const imageInput = document.getElementById('imageInput');
+            
+            if (bgType === 'text') {
+                textInput.classList.remove('hidden');
+                imageInput.classList.add('hidden');
+            } else {
+                textInput.classList.add('hidden');
+                imageInput.classList.remove('hidden');
+            }
+        }
+
+        // Helper: Convert Text to a Canvas Image (Blob)
+        function createTextCanvasBlob(text) {
+            return new Promise((resolve) => {
+                const canvas = document.createElement('canvas');
+                // Standard vertical resolution for WhatsApp Status
+                canvas.width = 720; 
+                canvas.height = 1280;
+                const ctx = canvas.getContext('2d');
+                
+                // Draw Black Background
+                ctx.fillStyle = '#111111';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                // Draw Text
+                ctx.fillStyle = '#FFFFFF';
+                ctx.font = '40px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                
+                // Basic word wrap
+                const words = text.split(' ');
+                let line = '';
+                let y = canvas.height / 2;
+                const lineHeight = 50;
+                
+                for(let n = 0; n < words.length; n++) {
+                    let testLine = line + words[n] + ' ';
+                    let metrics = ctx.measureText(testLine);
+                    if (metrics.width > canvas.width - 100 && n > 0) {
+                        ctx.fillText(line, canvas.width / 2, y);
+                        line = words[n] + ' ';
+                        y += lineHeight;
+                    } else {
+                        line = testLine;
+                    }
+                }
+                ctx.fillText(line, canvas.width / 2, y);
+                
+                canvas.toBlob(resolve, 'image/jpeg');
+            });
+        }
+
+        async function processMedia() {
+            const mediaFile = document.getElementById('mediaInput').files[0];
+            if (!mediaFile) {
+                alert("Please upload a media file first!");
+                return;
+            }
+
+            const btn = document.getElementById('processBtn');
+            const status = document.getElementById('status');
+            const logBox = document.getElementById('log');
+            const progressBar = document.getElementById('progressBar');
+            const progressContainer = document.getElementById('progressContainer');
+            const downloadLink = document.getElementById('downloadLink');
+
+            btn.disabled = true;
+            btn.classList.add('opacity-50');
+            downloadLink.classList.add('hidden');
+            progressContainer.classList.remove('hidden');
+            logBox.innerText = "";
+            progressBar.style.width = "0%";
+
+            try {
+                // Initialize FFmpeg
+                if (!ffmpeg) {
+                    status.innerText = "Loading FFmpeg engine... (This takes a moment on first run)";
+                    ffmpeg = new FFmpeg();
+                    
+                    ffmpeg.on('log', ({ message }) => {
+                        logBox.innerText += message + "\n";
+                        logBox.scrollTop = logBox.scrollHeight;
+                    });
+                    
+                    ffmpeg.on('progress', ({ progress }) => {
+                        progressBar.style.width = `${Math.round(progress * 100)}%`;
+                    });
+
+                    // Using the single-threaded core so we don't need COOP/COEP headers on GitHub Pages
+                    await ffmpeg.load({
+                        coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+                        wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
+                    });
+                }
+
+                status.innerText = "Reading input file...";
+                const inputName = 'input_media' + mediaFile.name.substring(mediaFile.name.lastIndexOf('.'));
+                await ffmpeg.writeFile(inputName, await fetchFile(mediaFile));
+
+                const mode = document.querySelector('input[name="mode"]:checked').value;
+
+                if (mode === 'mp3') {
+                    status.innerText = "Extracting Audio to MP3...";
+                    await ffmpeg.exec(['-i', inputName, '-vn', '-b:a', '192k', 'output.mp3']);
+                    
+                    const data = await ffmpeg.readFile('output.mp3');
+                    const blob = new Blob([data.buffer], { type: 'audio/mp3' });
+                    setupDownload(blob, 'extracted_audio.mp3');
+                } 
+                else if (mode === 'mp4') {
+                    status.innerText = "Preparing Background Image...";
+                    const bgType = document.querySelector('input[name="bgType"]:checked').value;
+                    let imageBlob;
+                    
+                    if (bgType === 'text') {
+                        const text = document.getElementById('textInput').value || "Playing Audio...";
+                        imageBlob = await createTextCanvasBlob(text);
+                    } else {
+                        imageBlob = document.getElementById('imageInput').files[0];
+                        if (!imageBlob) {
+                            alert("Please select an image file.");
+                            throw new Error("No image selected");
+                        }
+                    }
+
+                    await ffmpeg.writeFile('bg_image.jpg', await fetchFile(imageBlob));
+
+                    status.innerText = "Encoding Video for WhatsApp... (This might take a few minutes depending on your device)";
+                    
+                    // FFmpeg command explained:
+                    // -loop 1: Loop the single image infinitely
+                    // -i bg_image.jpg: Input 0 (Video)
+                    // -i inputName: Input 1 (Audio source)
+                    // -map 0:v:0: Use video from input 0
+                    // -map 1:a:0: Use audio from input 1
+                    // -shortest: End processing when the shortest stream (the audio) ends
+                    await ffmpeg.exec([
+                        '-loop', '1', 
+                        '-i', 'bg_image.jpg', 
+                        '-i', inputName, 
+                        '-map', '0:v:0', 
+                        '-map', '1:a:0', 
+                        '-c:v', 'libx264', 
+                        '-tune', 'stillimage', 
+                        '-c:a', 'aac', 
+                        '-b:a', '192k', 
+                        '-pix_fmt', 'yuv420p', 
+                        '-shortest', 
+                        'output.mp4'
+                    ]);
+
+                    const data = await ffmpeg.readFile('output.mp4');
+                    const blob = new Blob([data.buffer], { type: 'video/mp4' });
+                    setupDownload(blob, 'whatsapp_status.mp4');
+                }
+                
+                status.innerText = "Processing Complete!";
+                
+            } catch (err) {
+                console.error(err);
+                status.innerText = "An error occurred. Check console for details.";
+            } finally {
+                btn.disabled = false;
+                btn.classList.remove('opacity-50');
+            }
+        }
+
+        function setupDownload(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const downloadLink = document.getElementById('downloadLink');
+            downloadLink.href = url;
+            downloadLink.download = filename;
+            downloadLink.classList.remove('hidden');
+        }
+
+        // Run once on load to ensure UI sets up
+        toggleOptions();
+    </script>
+</body>
+</html>
